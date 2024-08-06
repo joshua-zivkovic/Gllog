@@ -5,22 +5,12 @@ keybindings="alt+1: 20, alt+2: 50, alt+3: 100, alt+4: Previous page, alt+5: Next
 # check if possible to see if preview is open and update keybindings with preview ones
 
 jq_script='
-
-def colours:
-    {
-        "white": "\u001b[37m",
-        "green": "\u001b[32m",
-        "red": "\u001b[31m",
-        "blue": "\u001b[34m",
-        "orange": "\u001b[33m",
-    };
-
 .[]
 | [
     .id,
     .name,
     .created_at,
-    if .status == "failed" then colours.red else colours.green end + .status + colours.white,
+    .status,
     .commit.short_id,
     .ref,
     .user.name
@@ -56,14 +46,23 @@ function fetch_jobs() {
     update_page_info
 
     # Format the json response into a table
-    jq -r "$jq_script" <<< "$jobs" | awk -F "," '{
-        cmd="cksum<<<"$2 "";
-        cmd | getline check;
-        close(cmd);
-        split(check,checkArr, " ");
-        # 255 instead of 256 because the resulting colours look nicer
-        colour_value=checkArr[1]%255
-        print $1 "," "\u001b[38;5;" colour_value "m" $2 "\u001b[37m" "," $3 "," $4 "," $5 "," $6 "," $7}' \
+    jq -r "$jq_script" <<< "$jobs" | awk -F "," '
+        BEGIN{ORS=""}
+        {
+            cmd="cksum<<<"$2 "";
+            cmd | getline check;
+            close(cmd);
+            split(check,checkArr, " ");
+            # 255 instead of 256 because the resulting colours look nicer
+            colour_value=checkArr[1]%255
+            print $1 ","
+            print "\u001b[38;5;" colour_value "m"$2 "\u001b[37m" ","
+            print $3 ","
+            if ($4=="failed") {print "\u001b[31m"} else {print "\u001b[32m"}
+            print $4 "\u001b[37m,"
+            print $5 "," $6 "," $7
+            print "\n"
+        }' \
     | column -ts "," -N "Job ID,Job Name,Created at,Status,Commit sha,Branch,Triggered by"
 }
 
