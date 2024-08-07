@@ -58,7 +58,7 @@ function fetch_jobs() {
             print $1 ","
             print "\u001b[38;5;" colour_value "m"$2 "\u001b[37m" ","
             print $3 ","
-            if ($4=="failed") {print "\u001b[31m"} else {print "\u001b[32m"}
+            if ($4=="failed") {print "\u001b[31m"} else if ($4=="success") {print "\u001b[32m"} else {print "\u001b[33m"}
             print $4 "\u001b[37m,"
             print $5 "," $6 "," $7
             print "\n"
