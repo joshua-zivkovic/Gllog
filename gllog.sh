@@ -83,19 +83,20 @@ function fetch_job_from_id() {
 
 function process_url() {
     # break up the URL in separate variables, this bit is only for the domain, the remainder is everything after that
-    IFS=/ read -r _ _ domain remainder <<< "$1"
+    IFS=/ read -r _ _ PROJECT_DOMAIN remainder <<< "$1"
 
     # Reverse the remainder and store the definite bits, anything left over are all the parent groups
     IFS=/ read -r job_id _ _ project group <<< "$(reverse "$remainder")"
 
     # Determine path for the log file
-    LOG_FILE=$(log_file_path "$domain" "$(reverse "$group")-$project" "$job_id")
+    LOG_FILE=$(log_file_path "$PROJECT_DOMAIN" "$(reverse "$group")-$project" "$job_id")
 
     # If ther log file is already stored, just use that
     if [ ! -f "$LOG_FILE" ] || [ ! -s "$LOG_FILE" ]; then
         # Retrieve the relevant token from .gitlab.cfg file
         export PROJECT_DOMAIN
-        LOG_TOKEN=$(jq -r '.[] | select(.PROJECT_DOMAIN == $ENV.PROJECT_DOMAIN).personal_access_token' "$config_file")
+
+        LOG_TOKEN=$(jq -r '.[] | select(.domain == $ENV.PROJECT_DOMAIN).personal_access_token' "$config_file")
 
         # Get the job log using the URL encoded project path
         if ! curl -fs --request GET --header "PRIVATE-TOKEN: $LOG_TOKEN" "https://$PROJECT_DOMAIN/api/v4/projects/$(reverse "$group" | sed 's/\//%2F/g')%2F$project/jobs/$job_id/trace" > "$LOG_FILE"; then
