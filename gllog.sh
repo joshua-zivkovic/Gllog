@@ -111,7 +111,7 @@ function process_url() {
 function process_project() {
     # Export so jq can see it
     export LOG_INPUT="$1"
-    echo $config_file
+
     # Get the profile with the configured alias and store the info in variables
     read -r domain project_path LOG_TOKEN \
         <<< "$(jq -r '.[] | select(.projects.[].alias == $ENV.LOG_INPUT)
