@@ -49,7 +49,7 @@ function fetch_jobs() {
     jq -r "$jq_script" <<< "$jobs" | awk -F "," '
         BEGIN{ORS=""}
         {
-            cmd="cksum<<<"$2 "";
+            cmd="cksum<<<\""$2"\"";
             cmd | getline check;
             close(cmd);
             split(check,checkArr, " ");
