@@ -1,6 +1,6 @@
 #! /usr/bin/env bash
 
-keybindings="alt+1: 20, alt+2: 50, alt+3: 100, alt+4: Previous page, alt+5: Next page, ?: Toggle preview"
+keybindings="alt+1: 20, alt+2: 50, alt+3: 100, alt+4: Previous page, alt+5: Next page, ?: Toggle preview, .: Open job in browser"
 # PREVIEW_KEYBINDINGS="Shift+up/down: scroll preview, Shift+left/right: Preview page up/down"
 # check if possible to see if preview is open and update keybindings with preview ones
 
@@ -81,6 +81,10 @@ function fetch_job_from_id() {
     echo "$LOG_FILE"
 }
 
+function open_job_in_browser() {
+    xdg-open "$1/$2/-/jobs/$3"
+}
+
 function process_url() {
     # break up the URL in separate variables, this bit is only for the domain, the remainder is everything after that
     IFS=/ read -r _ _ PROJECT_DOMAIN remainder <<< "$1"
@@ -143,6 +147,7 @@ function process_project() {
         `# Preview command: source this file, get the job ID from the current selected line, open the job logs` \
         --preview "source $0 && job_id=\$(echo {} | awk '{print \$1}') && $PAGER \$(fetch_job_from_id $domain $project_path $LOG_TOKEN $project_api_address \$job_id)" \
         --bind '?:toggle-preview' \
+        --bind ".:execute(source $0 && job_id=\$(echo {} | awk '{print \$1}') && open_job_in_browser $domain $project_path \$job_id)" \
         --bind 'shift-left:preview-page-up' \
         --bind 'shift-right:preview-page-down' \
         `# Keybindings for pagination` \
