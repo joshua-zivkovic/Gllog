@@ -216,6 +216,10 @@ EOF
     fi
 }
 
+function configured_projects() {
+    jq -r '.projects.[].projects[].alias' "$(config_file_path)"
+}
+
 function help() {
     echo "GitLab job log viewer"
     echo ""
@@ -225,6 +229,7 @@ function help() {
     echo ""
     echo "Options:"
     echo "-c FILE    Specify config file to use. Defaults to $HOME/.gllog.config"
+    echo "-l         List configured project aliases"
     echo "-x         Generate a template config at $HOME/.gllog.config"
     echo ""
     echo "Usage:"
@@ -238,10 +243,14 @@ function help() {
 }
 
 function handle_options() {
-    while getopts "c:xh" o; do
+    while getopts "c:lxh" o; do
         case "${o}" in
             c)
                 config_file="$OPTARG"
+                ;;
+            l)
+                configured_projects
+                exit 0
                 ;;
             x)
                 create_config
