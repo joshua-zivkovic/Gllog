@@ -10,10 +10,12 @@ jq_script='
     .id,
     .name,
     .created_at,
+    .duration,
     .status,
     .commit.short_id,
     .ref,
-    .user.name
+    .user.name,
+    (.runner.id | if . then "#\(.)" end)
 ] | join(",")'
 
 # Function to reverse any '/' separated string
@@ -34,10 +36,12 @@ function update_page_info() {
     read -r next_page current_page per_page prev_page <<< "$(tr -d '\015' < /tmp/gllog/.response-headers \
     | awk '/x-next-page|x-page|x-per-page|x-prev-page/ {print $2} END{ORS="\n"; print}' ORS=" ")"
     # Update runtime settings with page info
-    echo "$per_page;$current_page;$prev_page;$next_page" > $settings_file
+    echo "$per_page;$current_page;$prev_page;$next_page" > "$settings_file"
 }
 
 function fetch_jobs() {
+    mkdir -p /tmp/gllog
+
     # Try and fetch the jobs
     if ! jobs=$(curl -fsD /tmp/gllog/.response-headers --request GET --header "PRIVATE-TOKEN: $1" "$2/jobs?per_page=$3&page=$4"); then
         # Could maybe check exit codes here to give a more descriptive error than it maybe being the user's tokens
@@ -46,43 +50,69 @@ function fetch_jobs() {
         exit 2
     fi
 
-    # Update page info from latest response
-    update_page_info
+    if $5; then
+        # Update page info from latest response
+        update_page_info
+    fi
 
     # Format the json response into a table
     jq -r "$jq_script" <<< "$jobs" | awk -F "," '
+        function colour(pos){
+            cksum_cmd="cksum<<<\""pos"\""
+            cksum_cmd | getline check
+            close(cksum_cmd)
+            split(check,checkArr, " ")
+            return checkArr[1]%255
+        }
+        function time(seconds){
+            date_cmd="date -d@"seconds" -u +%H:%M:%S"
+            date_cmd | getline result
+            close(date_cmd)
+            return result
+        }
+        function datetime(time){
+            datetime_cmd="date -d "time" -u \"+%Y/%m/%d %H:%M:%S.%3N\""
+            datetime_cmd | getline result
+            close(datetime_cmd)
+            return result
+        }
         BEGIN{ORS=""}
         {
-            cmd="cksum<<<\""$2"\"";
-            cmd | getline check;
-            close(cmd);
-            split(check,checkArr, " ");
             # 255 instead of 256 because the resulting colours look nicer
-            colour_value=checkArr[1]%255
+            colour_value=colour($2)
+            if ($4 != "") {duration=time($4)} else {duration=""}
             print $1 ","
             print "\u001b[38;5;" colour_value "m"$2 "\u001b[37m" ","
-            print $3 ","
-            if ($4=="failed") {print "\u001b[31m"} else if ($4=="success") {print "\u001b[32m"} else {print "\u001b[33m"}
-            print $4 "\u001b[37m,"
-            print $5 "," $6 "," $7
+            print datetime($3) ","
+            print duration ","
+            if ($5=="failed") {print "\u001b[31m"} else if ($5=="success") {print "\u001b[32m"} else {print "\u001b[33m"}
+            print $5 "\u001b[37m,"
+            print $6 "," $7 "," $8 "," $9
             print "\n"
         }' \
-    | column -ts "," -N "Job ID,Job Name,Created at,Status,Commit sha,Branch,Triggered by"
+    | column -ts "," -N "Job ID,Job Name,Created at,Duration,Status,Commit sha,Branch,Triggered by,Runner"
 }
 
 function fetch_job_from_id() {
     # Determine path for the log file
     # $domain, $project_path, $job_id
-    LOG_FILE=$(log_file_path "$1" "$2" "$5" )
+    log_file=$(log_file_path "$1" "$2" "$5" )
+
 
     # If ther log file is already stored, just use that
-    if [ ! -f "$LOG_FILE" ] || [ ! -s "$LOG_FILE" ]; then
-        # $LOG_TOKEN, $project_api_address, $job_id, $LOG_FILE
-        curl -fs --request GET --header "PRIVATE-TOKEN: $3" "$4/jobs/$5/trace" > "$LOG_FILE"
+    if [ ! -f "$log_file" ] || [ ! -s "$log_file" ]; then
+        # If job is still running, change log-file path
+        # This means it will be refreshed everytime it is opened
+        if [ "$6" = "running" ]; then
+            log_file="${log_file}-running"
+        fi
+
+        # $log_token, $project_api_address, $job_id, $log_file
+        curl -fs --request GET --header "PRIVATE-TOKEN: $3" "$4/jobs/$5/trace" > "$log_file"
     fi
 
     # return log file
-    echo "$LOG_FILE"
+    echo "$log_file"
 }
 
 function open_job_in_browser() {
@@ -121,27 +151,27 @@ function run_down() {
 
 function process_url() {
     # break up the URL in separate variables, this bit is only for the domain, the remainder is everything after that
-    IFS=/ read -r _ _ PROJECT_DOMAIN remainder <<< "$1"
+    IFS=/ read -r _ _ project_domain remainder <<< "$1"
 
     # Reverse the remainder and store the definite bits, anything left over are all the parent groups
     IFS=/ read -r job_id _ _ project group <<< "$(reverse "$remainder")"
 
     # Determine path for the log file
-    LOG_FILE=$(log_file_path "$PROJECT_DOMAIN" "$(reverse "$group")-$project" "$job_id")
+    log_file=$(log_file_path "$project_domain" "$(reverse "$group")-$project" "$job_id")
 
     # If ther log file is already stored, just use that
-    if [ ! -f "$LOG_FILE" ] || [ ! -s "$LOG_FILE" ]; then
+    if [ ! -f "$log_file" ] || [ ! -s "$log_file" ]; then
         # Retrieve the relevant token from .gitlab.cfg file
-        export PROJECT_DOMAIN
+        export project_domain
 
-        LOG_TOKEN=$(jq -r '.[] | select(.domain == $ENV.PROJECT_DOMAIN).personal_access_token' "$config_file")
+        log_token=$(jq -r '.projects.[] | select(.domain == $ENV.project_domain).personal_access_token' "$config_file")
 
         # Get the job log using the URL encoded project path
-        if ! curl -fs --request GET --header "PRIVATE-TOKEN: $LOG_TOKEN" "https://$PROJECT_DOMAIN/api/v4/projects/$(reverse "$group" | sed 's/\//%2F/g')%2F$project/jobs/$job_id/trace" > "$LOG_FILE"; then
+        if ! curl -fs --request GET --header "PRIVATE-TOKEN: $log_token" "https://$project_domain/api/v4/projects/$(reverse "$group" | sed 's/\//%2F/g')%2F$project/jobs/$job_id/trace" > "$log_file"; then
             echo "Failed to get job log"
             echo "Check tokens and try again"
             # Remove the empty log file so it doesn't get used on subsequent runs
-            rm "$LOG_FILE"
+            rm "$log_file"
             exit 1
         fi
     fi
@@ -149,18 +179,18 @@ function process_url() {
 
 function process_project() {
     # Export so jq can see it
-    export LOG_INPUT="$1"
+    export log_input="$1"
 
     # Get the profile with the configured alias and store the info in variables
-    read -r domain project_path LOG_TOKEN \
-        <<< "$(jq -r '.[] | select(.projects.[].alias == $ENV.LOG_INPUT)
-                | [.domain, (.projects.[] | select(.alias == $ENV.LOG_INPUT).path), .personal_access_token]
+    read -r domain project_path log_token \
+        <<< "$(jq -r '.projects.[] | select(.projects.[].alias == $ENV.log_input)
+                | [.domain, (.projects.[] | select(.alias == $ENV.log_input).path), .personal_access_token]
                 | join(" ")' \
                 "$config_file")"
 
     # Failed to get info from profiles
     if [ -z "$domain" ]; then
-        echo "Project '$LOG_INPUT' not configured. Please add it to $config_file"
+        echo "Project '$log_input' not configured. Please add it to $config_file"
         exit 4
     fi
 
@@ -172,25 +202,25 @@ function process_project() {
     echo "20;1;1;1" > $settings_file
 
     # Retrieve job ID as selected by user
-    job_id=$(fetch_jobs "$LOG_TOKEN" "$project_api_address" 20 1 \
+    job_id=$(fetch_jobs "$log_token" "$project_api_address" 20 1 \
     | fzf --ansi --no-sort --reverse --border --border-label " $project_path " --header-lines=1 --highlight-line \
         `# Overwrite 'enter' key action with execute command so fzf isn't exited when viewing logs` \
-        --bind "enter:execute(source $0 && job_id=\$(echo {} | awk '{print \$1}') && $PAGER \$(fetch_job_from_id $domain $project_path $LOG_TOKEN $project_api_address \$job_id))" \
+        --bind "enter:execute(source $0 && read job_id job_status <<< \$(echo {} | awk '{print \$1 \" \" \$5}') && $PAGER \$(fetch_job_from_id $domain $project_path $log_token $project_api_address \$job_id \$job_status))" \
         `# Default preview window to hidden, this also stops execution of preview command` \
         --preview-window=hidden,~1 \
         `# Preview command: source this file, get the job ID from the current selected line, open the job logs` \
-        --preview "source $0 && job_id=\$(echo {} | awk '{print \$1}') && $PAGER \$(fetch_job_from_id $domain $project_path $LOG_TOKEN $project_api_address \$job_id)" \
+        --preview "source $0 && read job_id job_status <<< \$(echo {} | awk '{print \$1 \" \" \$5}') && $PAGER \$(fetch_job_from_id $domain $project_path $log_token $project_api_address \$job_id \$job_status)" \
         --bind '?:toggle-preview' \
-        --bind ".:execute(source $0 && job_id=\$(echo {} | awk '{print \$1}') && open_job_in_browser $domain $project_path \$job_id)" \
+        --bind ".:execute(source $0 && read job_id <<< \$(echo {} | awk '{print \$1}') && open_job_in_browser $domain $project_path \$job_id)" \
         --bind 'shift-left:preview-page-up' \
         --bind 'shift-right:preview-page-down' \
         `# Keybindings for pagination` \
-        --bind "alt-1:reload-sync(IFS=\; read -r per_page page prev_page next_page < $settings_file && source $0 && fetch_jobs $LOG_TOKEN $project_api_address 20 \$page)" \
-        --bind "alt-2:reload-sync(IFS=\; read -r per_page page prev_page next_page < $settings_file && source $0 && fetch_jobs $LOG_TOKEN $project_api_address 50 \$page)" \
-        --bind "alt-3:reload-sync(IFS=\; read -r per_page page prev_page next_page < $settings_file && source $0 && fetch_jobs $LOG_TOKEN $project_api_address 100 \$page)" \
-        --bind "alt-4:reload-sync(IFS=\; read -r per_page page prev_page next_page < $settings_file && source $0 && fetch_jobs $LOG_TOKEN $project_api_address \$per_page \$prev_page)" \
-        --bind "alt-5:reload-sync(IFS=\; read -r per_page page prev_page next_page < $settings_file && source $0 && fetch_jobs $LOG_TOKEN $project_api_address \$per_page \$next_page)" \
-        `# Command used for what the info bar should display: Page info + keybidnings` \
+        --bind "alt-1:reload-sync(IFS=\; read -r per_page page prev_page next_page < $settings_file && source $0 && fetch_jobs $log_token $project_api_address 20 \$page)" \
+        --bind "alt-2:reload-sync(IFS=\; read -r per_page page prev_page next_page < $settings_file && source $0 && fetch_jobs $log_token $project_api_address 50 \$page)" \
+        --bind "alt-3:reload-sync(IFS=\; read -r per_page page prev_page next_page < $settings_file && source $0 && fetch_jobs $log_token $project_api_address 100 \$page)" \
+        --bind "alt-4:reload-sync(IFS=\; read -r per_page page prev_page next_page < $settings_file && source $0 && fetch_jobs $log_token $project_api_address \$per_page \$prev_page)" \
+        --bind "alt-5:reload-sync(IFS=\; read -r per_page page prev_page next_page < $settings_file && source $0 && fetch_jobs $log_token $project_api_address \$per_page \$next_page)" \
+        `# Command used for what the info bar should display: Page info + keybindings` \
         --info-command="awk -F ';' '{print \"\u001b[36mPage: \" \$2 \", Viewing \" \$1 \"\u001b[37m | \u001b[38;5;174m$keybindings\u001b[37m\"}' $settings_file" \
         --info=default \
     | awk '{print $1}')
@@ -202,14 +232,14 @@ function process_project() {
         exit 0
     fi
 
-    LOG_FILE="$(fetch_job_from_id $domain $project_path $LOG_TOKEN $project_api_address $job_id)"
+    log_file="$(fetch_job_from_id "$domain" "$project_path" "$log_token" "$project_api_address" "$job_id")"
 }
 
 function main() {
     # Make log directory if it doesn't exist
     mkdir -p /tmp/gllog
 
-    config_file="${config_file:=$HOME/.gllog.config}"
+    config_file="$(config_file_path)"
 
     # identify if input was a full job url
     if [[ $1 =~ https://.*-/jobs/[0-9]+ ]]; then
@@ -219,7 +249,7 @@ function main() {
     fi
 
     # Display the log using user's default pager
-    $PAGER "$LOG_FILE"
+    $PAGER "$log_file"
 }
 
 function create_config() {
