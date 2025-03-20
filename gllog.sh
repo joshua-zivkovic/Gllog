@@ -21,6 +21,10 @@ function reverse() {
     tr '/' $'\n' <<< "$@" | tac | paste -s -d '/'
 }
 
+function config_file_path {
+    echo "${config_file:=$HOME/.gllog.config}"
+}
+
 function log_file_path() {
     echo "/tmp/gllog/$1-$(echo "$2" | sed 's/\//-/g')-$3"
 }
@@ -83,6 +87,36 @@ function fetch_job_from_id() {
 
 function open_job_in_browser() {
     xdg-open "$1/$2/-/jobs/$3"
+}
+
+function run_down() {
+    config_file="$(config_file_path)"
+
+    IFS=" " read -r -a projects <<< "$(jq -r '.rundown.projects | join(" ")' "$config_file")"
+    # collected_logs=()
+    for project_alias in "${projects[@]}"; do
+        export project_alias
+        read -r domain project_path log_token \
+            <<< "$(jq -r '.projects.[] | select(.projects.[].alias == $ENV.project_alias)
+                | [.domain, (.projects.[] | select(.alias == $ENV.project_alias).path), .personal_access_token]
+                | join(" ")' \
+                "$config_file")"
+        project_api_address="https://$domain/api/v4/projects/$(sed 's/\//%2F/g' <<< "$project_path")"
+
+        echo "$project_alias ($domain/$project_path)"
+
+        fetch_jobs "$log_token" "$project_api_address" 5 1 false
+        # output="$(fetch_jobs "$log_token" "$project_api_address" 5 1 false)" #> /tmp/gllog_"$project_alias"
+        # collected_logs+=("$output")
+
+        if [[ $project_alias != "${projects[-1]}" ]]; then
+            echo "" # Separate each output
+        fi
+    done
+    # awk_join <("${collected_logs[1]}")
+    # awk_join <("${collected_logs[3]}") <("${collected_logs[4]}")
+    # awk_join /tmp/file_*
+    # rm /tmp/gllog_*
 }
 
 function process_url() {
@@ -192,22 +226,30 @@ function create_config() {
     config_path=$HOME/.gllog.config
     if [ ! -f "$config_path" ]; then
         cat <<EOF > "$config_path"
-[
-    {
-        "domain": "gitlab.example.com",
-        "personal_access_token": "",
+{
+    "projects": [
+        {
+            "domain": "gitlab.example.com",
+            "personal_access_token": "",
+            "projects": [
+                {
+                    "path": "path/to/project",
+                    "alias": "foo"
+                },
+                {
+                    "path": "another/project",
+                    "alias": "bar"
+                }
+            ]
+        }
+    ]
+    "rundown": {
         "projects": [
-            {
-                "path": "path/to/project",
-                "alias": "foo"
-            },
-            {
-                "path": "another/project",
-                "alias": "bar"
-            }
+            "foo",
+            "bar"
         ]
     }
-]
+}
 
 EOF
         echo "Config created at $config_path"
@@ -243,7 +285,7 @@ function help() {
 }
 
 function handle_options() {
-    while getopts "c:lxh" o; do
+    while getopts "c:lxhr" o; do
         case "${o}" in
             c)
                 config_file="$OPTARG"
@@ -254,6 +296,10 @@ function handle_options() {
                 ;;
             x)
                 create_config
+                exit 0
+                ;;
+            r)
+                run_down
                 exit 0
                 ;;
             h|*)
