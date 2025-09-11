@@ -6,6 +6,14 @@ Gllog (GitLab Log) is a tool to view Gitlab CI/CD job logs from the command line
 
 Gllog (GitLab Log) is a tool to view Gitlab CI/CD job logs from the command line.
 
+# Dependencies
+
+Gllog tries to keep dependencies to the minimum, using only programs that you probably already have installed.
+- awk
+- curl
+- fzf
+- jq
+
 # Installing
 
 Create a symlink for Gllog
